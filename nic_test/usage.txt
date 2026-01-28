@@ -1,0 +1,9 @@
+ip -br addr
+ip route
+ibstat
+
+sudo apt update && sudo add-apt-repository -y universe && sudo apt update && sudo apt install -y \
+  iproute2 ethtool net-tools pciutils tcpdump sysstat iperf3 iftop nload bmon \
+  rdma-core infiniband-diags ibverbs-utils \
+  bpfcc-tools python3-bpfcc linux-headers-$(uname -r) clang llvm libelf-dev zlib1g-dev build-essential \
+  linux-tools-$(uname -r) bpftrace mstflint
