@@ -78,8 +78,8 @@ static void usage(FILE *stream, const char *prog) {
         "用法: %s [选项]\n"
         "\n"
         "选项:\n"
-        "  --device NAME           IB 设备名，例如 mlx5_0\n"
-        "  --port NUM              IB 端口号，例如 1\n"
+        "  --device NAME           RDMA 设备名，例如 mlx5_0 或 mlx5_bond_0\n"
+        "  --port NUM              端口号，例如 1\n"
         "  --interval-us NUM       目标采样周期，单位 us，默认 %.1f\n"
         "  -o, --output PATH       输出 CSV 文件，默认 ib_utilization_us.csv\n"
         "  --append                追加写入已有文件\n"
@@ -87,7 +87,7 @@ static void usage(FILE *stream, const char *prog) {
         "  --flush-every NUM       每写入 NUM 条记录 flush 一次，默认 %" PRIu64 "\n"
         "  --print-every NUM       每采样 NUM 次打印一次摘要，默认 %" PRIu64 " 表示不打印\n"
         "  --quiet                 关闭启动与结束摘要输出\n"
-        "  --list-ports            列出当前主机可见的 IB 端口并退出\n"
+        "  --list-ports            列出当前主机可见的 RDMA 端口并退出\n"
         "  -h, --help              显示帮助\n",
         prog,
         DEFAULT_INTERVAL_US,
@@ -487,8 +487,10 @@ static void monitor_init(const Config *cfg, Monitor *mon) {
         fprintf(stderr, "错误: 无法读取 %s\n", path);
         exit(1);
     }
-    if (strcasecmp(mon->link_layer, "InfiniBand") != 0) {
-        fprintf(stderr, "错误: 端口 %s:%d 的 link_layer 为 %s，不是原生 InfiniBand。\n",
+    if (strcasecmp(mon->link_layer, "InfiniBand") != 0 &&
+        strcasecmp(mon->link_layer, "Ethernet") != 0) {
+        fprintf(stderr,
+                "错误: 端口 %s:%d 的 link_layer 为 %s；当前仅支持 InfiniBand 或 Ethernet(RoCE) 模式。\n",
                 cfg->device, cfg->port, mon->link_layer);
         exit(1);
     }
@@ -640,8 +642,8 @@ int main(int argc, char **argv) {
         printf("开始监控 %s:%d，输出文件: %s\n", cfg.device, cfg.port, cfg.output_path);
         printf("链路信息: rate=%s state=%s phys_state=%s link_layer=%s target_interval=%.3f us\n",
                mon.rate_text, mon.state, mon.phys_state, mon.link_layer, cfg.interval_us);
-        printf("实现说明: 当前版本基于 sysfs 硬件计数器 + CLOCK_MONOTONIC_RAW + busy wait；"
-               "实际间隔受 sysfs read 延迟限制。\n");
+        printf("实现说明: 当前版本基于 RDMA 端口计数器 + CLOCK_MONOTONIC_RAW + busy wait；"
+               "支持 InfiniBand 与 Ethernet(RoCE) 模式，实际间隔受 sysfs read 延迟限制。\n");
         printf("按 Ctrl+C 停止。\n");
     }
 

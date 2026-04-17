@@ -1,15 +1,15 @@
-# Linux InfiniBand 链路利用率实时监控（us 粒度，高频轮询原型）
+# Linux RDMA 端口利用率实时监控（IB 与 RoCE，us 粒度高频轮询原型）
 
 ## 1. 目标与边界
 
-这份实现面向 **InfiniBand 端口带宽利用率** 的高频采样，目标是把采样粒度推进到 **微秒量级**，并将结果持续记录到 CSV 文件。
+这份实现面向 **RDMA 端口带宽利用率** 的高频采样，目标是把采样粒度推进到 **微秒量级**，并将结果持续记录到 CSV 文件。
 
 先给出最重要的结论：
 
 - 常规用户态工具，如 `sar`、`ibstat`、`perf`，**不能稳定做到 us 级采样**
 - Python 版 sysfs 轮询也**不适合** us 级采样
 - 本目录当前实现的是你给定思路中的 **方案 A**：
-  - **IB 硬件计数器**
+  - **RDMA 端口硬件计数器**
   - **`CLOCK_MONOTONIC_RAW`**
   - **busy wait**
   - **用户态直接轮询 sysfs counter**
@@ -31,7 +31,7 @@
 
 ---
 
-## 2. 经典定义
+## 2. 经典定义与适用范围
 
 链路利用率的经典定义仍然是：
 
@@ -39,7 +39,7 @@
 util = \frac{\Delta bytes / \Delta t}{link\ bandwidth}
 \]
 
-对 IB 端口，分子使用 PMA 标准计数器：
+对 RDMA 端口，分子使用 PMA 标准计数器：
 
 - `port_xmit_data`
 - `port_rcv_data`
@@ -71,7 +71,7 @@ Linux sysfs 路径：
 - `xmit_util_pct = xmit_bps / rate_bps × 100`
 - `rcv_util_pct = rcv_bps / rate_bps × 100`
 
-由于 IB 是全双工，脚本同时输出：
+由于链路是全双工，脚本同时输出：
 
 - `xmit_util_pct`
 - `rcv_util_pct`
@@ -82,6 +82,13 @@ Linux sysfs 路径：
 
 - `summary_util_pct` 更适合判断繁忙方向
 - `aggregate_util_pct` 更适合看双向平均负载
+
+这里需要补充一个术语边界：
+
+- 当 `link_layer = InfiniBand` 时，结果应称为 **原生 IB 端口利用率**
+- 当 `link_layer = Ethernet` 时，结果应称为 **RoCE/Ethernet RDMA 端口利用率**
+
+两种模式下，经典定义与计算公式保持一致；差异只在链路层模式，不在统计口径。
 
 ---
 
@@ -217,7 +224,7 @@ gcc -O3 -std=c11 -Wall -Wextra -pedantic -o ib_util_monitor_us ib_util_monitor_u
 
 ## 8. 运行前检查
 
-先确认本机存在可用的 IB 端口：
+先确认本机存在可用的 RDMA 端口：
 
 ```bash
 ./ib_util_monitor_us --list-ports
@@ -241,10 +248,17 @@ cat /sys/class/infiniband/mlx5_0/ports/1/rate
 
 你需要确认：
 
-- `link_layer = InfiniBand`
+- `link_layer = InfiniBand` 或 `Ethernet`
 - `state = ACTIVE`
 - `phys_state = LinkUp`
-- `rate` 可正常读出，例如 `100 Gb/sec (4X EDR)`
+- `rate` 可正常读出，例如 `100 Gb/sec (4X EDR)` 或 `100 Gb/sec (2X HDR)`
+
+如果是：
+
+- `InfiniBand`
+  - 输出应解释为原生 IB 端口利用率
+- `Ethernet`
+  - 输出应解释为 RoCE/Ethernet RDMA 端口利用率
 
 ---
 
@@ -253,12 +267,21 @@ cat /sys/class/infiniband/mlx5_0/ports/1/rate
 ### 9.1 最小可运行命令
 
 ```bash
-
 ./ib_util_monitor_us \
   --device ib_0 \
   --port 1 \
   --interval-us 5 \
   --output ./logs/ib_syccl_ag.csv
+```
+
+若当前主机工作在 RoCE 或 bond 设备形态，例如 `mlx5_bond_0`：
+
+```bash
+./ib_util_monitor_us \
+  --device mlx5_bond_0 \
+  --port 1 \
+  --interval-us 5 \
+  --output ./logs/roce_syccl_ag.csv
 ```
 
 ### 9.2 固定采样次数
@@ -380,7 +403,7 @@ sample_index,monotonic_raw_ns,target_interval_us,interval_ns,interval_us,read_co
   - 当前窗口的发送、接收速率
 
 - `xmit_util_pct` / `rcv_util_pct`
-  - 单方向链路利用率
+  - 单方向端口利用率
 
 - `summary_util_pct`
   - `max(xmit_util_pct, rcv_util_pct)`
@@ -484,6 +507,16 @@ README 和输出里都显式记录实际 `interval_us` 与 `read_cost_ns`
 2. **保留方案 A 的最短落地路径**  
 即使用 sysfs counter + `CLOCK_MONOTONIC_RAW` + busy wait 先把实验做起来
 
+同时，这版工具在实现层面已放宽为同时支持：
+
+- `link_layer = InfiniBand`
+- `link_layer = Ethernet`
+
+因此，它既可用于：
+
+- 原生 IB 端口
+- RoCE/Ethernet RDMA 端口
+
 因此，这版代码适合作为：
 
 - 方案 A 的可运行原型
@@ -517,7 +550,7 @@ sudo apt update
 sudo apt install -y build-essential rdma-core infiniband-diags ibverbs-utils util-linux
 make
 mkdir -p ./logs
-taskset -c 0 ./ib_util_monitor_us --device mlx5_0 --port 1 --interval-us 100 --output ./logs/ib_utilization_us.csv
+taskset -c 0 ./ib_util_monitor_us --device mlx5_0 --port 1 --interval-us 100 --output ./logs/rdma_utilization_us.csv
 ```
 
 ---
@@ -532,7 +565,7 @@ taskset -c 0 ./ib_util_monitor_us --device mlx5_0 --port 1 --interval-us 100 --o
   - 来源: [Linux Kernel ABI stable](https://docs.kernel.org/6.0/admin-guide/abi-stable.html)
 
 - `perfquery(8)`：
-  - 可读取 IB PMA performance counters
+  - 可读取 PMA performance counters
   - 来源: [perfquery(8)](https://man7.org/linux/man-pages/man8/perfquery.8.html)
 
 - `CLOCK_MONOTONIC_RAW`：
